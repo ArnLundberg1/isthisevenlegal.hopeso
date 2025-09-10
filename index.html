@@ -63,18 +63,18 @@
               id: 'home',
               name: 'Hem',
               icon: '🏠',
-              owner: 'Anna',
+              owner: 'Developer Arn',
               roles: {
                 Owner: { permissions: { manage_server:true, manage_roles:true, manage_channels:true, delete_messages:true, create_messages:true, invite_members:true } },
                 Admin: { permissions: { manage_server:false, manage_roles:false, manage_channels:true, delete_messages:true, create_messages:true, invite_members:true } },
                 Mod: { permissions: { manage_server:false, manage_roles:false, manage_channels:false, delete_messages:true, create_messages:true, invite_members:false } },
                 Member: { permissions: { manage_server:false, manage_roles:false, manage_channels:false, delete_messages:false, create_messages:true, invite_members:false } }
               },
-              members: ['Anna','Björn','Cara'],
-              memberRoles: { 'Anna':'Owner', 'Björn':'Admin', 'Cara':'Member' },
+              members: ['Anna','Cara'],
+              memberRoles: { 'Developer Arn':'Owner', 'Techno':'Member' },
               channels: {
                 general: { id:'general', name:'general', messages: [
-                  { id:'m1', user:'Anna', text:'Välkommen till Hem-servern!', ts: new Date().toISOString() }
+                  { id:'m1', user:'Developer Arn', text:'Välkommen till Developer-servern!', ts: new Date().toISOString() }
                 ] }
               },
               invites: [] // store pending invites (username strings) optionally
