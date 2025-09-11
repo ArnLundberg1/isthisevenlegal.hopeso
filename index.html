@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
-    <title>Discord-klon — Servrar, Roller & Invite</title>
+    <title>Discord-klon — Fullpackad (LocalStorage)</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
       :root{
@@ -16,8 +16,8 @@
       .scrollbar-thin::-webkit-scrollbar{height:8px;width:8px}
       .scrollbar-thin::-webkit-scrollbar-thumb{background:rgba(255,255,255,0.06);border-radius:8px}
       .server-icon { width:48px;height:48px;border-radius:12px;display:flex;align-items:center;justify-content:center;font-weight:700; }
-      .dot-unread{width:8px;height:8px;border-radius:50%;background:#f43f5e}
       .modal-backdrop{ background: rgba(0,0,0,0.6); position:fixed; inset:0; display:flex; align-items:center; justify-content:center; z-index:50; }
+      .category-header { font-size: 12px; color: #94a3b8; text-transform: uppercase; letter-spacing: .06em; margin-top: 8px; margin-bottom: 6px; }
     </style>
   </head>
   <body class="min-h-screen text-sm text-white">
@@ -31,666 +31,798 @@
     <script type="text/babel">
       const { useState, useEffect, useRef } = React;
 
-      /****************************************
-       * Storage keys, helpers & defaults
-       ****************************************/
-      const USERS_KEY = 'discord_clone_users_v2';
-      const DATA_KEY = 'discord_clone_data_v2';
-      const SESSION_KEY = 'discord_clone_session_v2';
+      /*** Storage keys ***/
+      const USERS_KEY = 'discord_full_users';
+      const DATA_KEY = 'discord_full_data';
+      const SESSION_KEY = 'discord_full_session';
+      const ADMIN_PW = 'admin12';
 
-      function loadUsers(){
-        try { return JSON.parse(localStorage.getItem(USERS_KEY)) || {}; }
-        catch(e){ return {}; }
-      }
+      /*** Helpers ***/
+      function loadUsers(){ try{ return JSON.parse(localStorage.getItem(USERS_KEY)) || {}; }catch(e){ return {}; } }
       function saveUsers(u){ localStorage.setItem(USERS_KEY, JSON.stringify(u)); }
-
-      function loadData(){
-        try { return JSON.parse(localStorage.getItem(DATA_KEY)) || defaultData(); }
-        catch(e){ return defaultData(); }
-      }
+      function loadData(){ try{ return JSON.parse(localStorage.getItem(DATA_KEY)) || { servers:{}, dms:{}, typing:{} }; }catch(e){ return { servers:{}, dms:{}, typing:{} }; } }
       function saveData(d){ localStorage.setItem(DATA_KEY, JSON.stringify(d)); }
-
       function loadSession(){ return localStorage.getItem(SESSION_KEY); }
-      function saveSession(username){ if(username) localStorage.setItem(SESSION_KEY, username); else localStorage.removeItem(SESSION_KEY); }
+      function saveSession(u){ if(u) localStorage.setItem(SESSION_KEY,u); else localStorage.removeItem(SESSION_KEY); }
+      function hashPw(p){ return btoa(p); } // demo only
+      function uid(prefix='id'){ return prefix + '_' + Math.random().toString(36).slice(2,9); }
+      function dmKey(a,b){ return [a,b].sort().join('|'); }
 
-      function hashPw(pw){ return btoa(pw); } // demo-only
+      /*** No prefilled users — you must register; bootstrap ensures data object exists ***/
+      (function bootstrap(){
+        const d = loadData();
+        if(!d.servers) d.servers = {};
+        if(!d.dms) d.dms = {};
+        if(!d.typing) d.typing = {};
+        saveData(d);
+      })();
 
-      function defaultData(){
-        // default roles include invite_members permission now
-        return {
-          servers: {
-            home: {
-              id: 'home',
-              name: 'Hem',
-              icon: '🏠',
-              owner: 'Developer Arn',
-              roles: {
-                Owner: { permissions: { manage_server:true, manage_roles:true, manage_channels:true, delete_messages:true, create_messages:true, invite_members:true } },
-                Admin: { permissions: { manage_server:false, manage_roles:false, manage_channels:true, delete_messages:true, create_messages:true, invite_members:true } },
-                Mod: { permissions: { manage_server:false, manage_roles:false, manage_channels:false, delete_messages:true, create_messages:true, invite_members:false } },
-                Member: { permissions: { manage_server:false, manage_roles:false, manage_channels:false, delete_messages:false, create_messages:true, invite_members:false } }
-              },
-              members: ['Anna','Cara'],
-              memberRoles: { 'Developer Arn':'Owner', 'Techno':'Member' },
-              channels: {
-                general: { id:'general', name:'general', messages: [
-                  { id:'m1', user:'Developer Arn', text:'Välkommen till Developer-servern!', ts: new Date().toISOString() }
-                ] }
-              },
-              invites: [] // store pending invites (username strings) optionally
-            }
-          }
-        };
-      }
-
-      /****************************************
-       * Permission helpers
-       ****************************************/
-      function getRoleForUser(server, username){
-        if(!server) return null;
-        return server.memberRoles?.[username] || 'Member';
-      }
-      function hasPermission(server, username, perm){
-        if(!server) return false;
-        const role = getRoleForUser(server, username);
-        const roleDef = server.roles?.[role];
-        return !!(roleDef && roleDef.permissions && roleDef.permissions[perm]);
-      }
-
-      /****************************************
-       * Auth UI: Register / Login
-       ****************************************/
-      function Auth({ onLogin }) {
-        const [tab, setTab] = useState('login'); // 'login'|'register'
+      /*** Admin Panel Component ***/
+      function AdminPanel({ onClose }){
+        const [keys, setKeys] = useState(Object.keys(localStorage).sort());
+        const [selected, setSelected] = useState(null);
+        const [content, setContent] = useState('');
+        useEffect(()=>{ setKeys(Object.keys(localStorage).sort()); },[]);
+        useEffect(()=>{ if(selected) setContent(localStorage.getItem(selected) || ''); },[selected]);
+        function save(){
+          try{
+            localStorage.setItem(selected, content);
+            alert('Sparat');
+            setKeys(Object.keys(localStorage).sort());
+          }catch(e){ alert('Fel: '+e.message); }
+        }
+        function clearKey(){
+          if(!selected) return;
+          if(confirm('Rensa '+selected+'?')){ localStorage.removeItem(selected); setSelected(null); setContent(''); setKeys(Object.keys(localStorage).sort()); }
+        }
+        function exportAll(){
+          const obj = {};
+          for(const k of Object.keys(localStorage)){ obj[k] = localStorage.getItem(k); }
+          const blob = new Blob([JSON.stringify(obj,null,2)], {type:'application/json'});
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url; a.download = 'discord_data_export.json'; a.click();
+          URL.revokeObjectURL(url);
+        }
+        function importAll(){
+          const txt = prompt('Klistra in JSON (eller avbryt):');
+          if(!txt) return;
+          try{
+            const obj = JSON.parse(txt);
+            for(const [k,v] of Object.entries(obj)){ localStorage.setItem(k, v); }
+            setKeys(Object.keys(localStorage).sort());
+            alert('Importerat');
+            window.location.reload();
+          }catch(e){ alert('Fel i JSON: '+e.message); }
+        }
         return (
-          <div className="flex items-center justify-center h-screen">
-            <div className="w-96">
-              <div className="bg-[#0f1724] p-6 rounded-2xl shadow-xl">
-                <div className="flex justify-between items-center mb-4">
-                  <h1 className="text-xl font-semibold">Discord-klon</h1>
-                  <div className="text-xs text-[#94a3b8]">Demo — localStorage</div>
+          <div className="modal-backdrop">
+            <div className="bg-[#0b1220] rounded p-4 w-[900px] h-[600px] flex flex-col">
+              <div className="flex justify-between items-center mb-2">
+                <div className="text-lg font-semibold">Admin Panel</div>
+                <div className="flex gap-2">
+                  <button onClick={exportAll} className="px-3 py-1 bg-white/6 rounded">Exportera</button>
+                  <button onClick={importAll} className="px-3 py-1 bg-white/6 rounded">Importera</button>
+                  <button onClick={onClose} className="px-3 py-1 bg-red-600/30 rounded">Stäng</button>
                 </div>
-
-                <div className="mb-4">
-                  <div className="flex gap-2">
-                    <button onClick={()=>setTab('login')} className={`flex-1 py-2 rounded ${tab==='login'?'bg-white/6':''}`}>Logga in</button>
-                    <button onClick={()=>setTab('register')} className={`flex-1 py-2 rounded ${tab==='register'?'bg-white/6':''}`}>Skapa konto</button>
+              </div>
+              <div className="flex-1 flex gap-2">
+                <div className="w-64 bg-[#071428] p-2 overflow-auto scrollbar-thin">
+                  {keys.map(k => (
+                    <div key={k} onClick={()=>setSelected(k)} className={`p-2 cursor-pointer ${selected===k?'bg-white/6':''}`}>{k}</div>
+                  ))}
+                </div>
+                <div className="flex-1 flex flex-col">
+                  <div className="flex-1">
+                    <textarea value={content} onChange={e=>setContent(e.target.value)} className="w-full h-full bg-[#071225] p-3 font-mono text-xs resize-none" />
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <button onClick={save} className="px-3 py-1 bg-green-600/40 rounded">Spara</button>
+                    <button onClick={clearKey} className="px-3 py-1 bg-red-600/40 rounded">Rensa</button>
                   </div>
                 </div>
-
-                {tab==='login' ? <LoginForm onLogin={onLogin} /> : <RegisterForm onRegister={onLogin} />}
-
-                <div className="text-xs text-[#94a3b8] mt-4">Tip: Använd "Logga in med Google" för att snabbt skapa demo-konton lokalt.</div>
               </div>
+            </div>
+          </div>
+        );
+      }
+
+      /*** Auth components ***/
+      function Auth({ onLogin }){
+        const [tab, setTab] = useState('login');
+        return (
+          <div className="flex items-center justify-center h-screen">
+            <div className="w-96 bg-[#0f1724] p-6 rounded-2xl shadow-xl">
+              <h1 className="text-2xl font-semibold mb-3">Discord-klon</h1>
+              <div className="flex gap-2 mb-4">
+                <button onClick={()=>setTab('login')} className={`flex-1 py-2 rounded ${tab==='login'?'bg-white/6':''}`}>Logga in</button>
+                <button onClick={()=>setTab('register')} className={`flex-1 py-2 rounded ${tab==='register'?'bg-white/6':''}`}>Skapa konto</button>
+              </div>
+              {tab==='login' ? <LoginForm onLogin={onLogin}/> : <RegisterForm onRegister={onLogin}/>}
+              <div className="text-xs text-[#94a3b8] mt-3">Logga in med användarnamn eller använd demo-knappen för ett snabbkonto.</div>
             </div>
           </div>
         );
       }
 
       function LoginForm({ onLogin }){
-        const [user, setUser] = useState('');
-        const [pw, setPw] = useState('');
-        function submit(e){
-          e.preventDefault();
+        const [user,setUser]=useState(''); const [pw,setPw]=useState('');
+        function submit(e){ e.preventDefault();
           const users = loadUsers();
-          if(!users[user]) { alert('Ingen sådan användare'); return; }
-          if(users[user].pw !== hashPw(pw)) { alert('Fel lösenord'); return; }
-          saveSession(user);
-          onLogin(user);
+          if(!users[user]) return alert('Ingen sådan användare');
+          if(users[user].pw !== hashPw(pw)) return alert('Fel lösenord');
+          saveSession(user); onLogin(user);
         }
         return (
           <form onSubmit={submit} className="flex flex-col gap-3">
-            <input value={user} onChange={e=>setUser(e.target.value)} placeholder="Användarnamn" className="p-2 bg-[#071225] rounded" />
-            <input value={pw} onChange={e=>setPw(e.target.value)} placeholder="Lösenord" type="password" className="p-2 bg-[#071225] rounded" />
-            <button className="mt-2 bg-[--accent] py-2 rounded">Logga in</button>
-
-            <button type="button" onClick={()=>{
-              // Fake Google login: create account if not exists
-              const g = 'google_' + Math.floor(Math.random()*100000);
-              const users = loadUsers();
-              if(!users[g]) { users[g] = { pw: hashPw('google-demo'), created: Date.now() }; saveUsers(users); }
-              saveSession(g); onLogin(g);
-            }} className="mt-2 text-xs bg-white/6 py-2 rounded">Logga in med Google (demo)</button>
+            <input className="p-2 bg-[#071225] rounded" placeholder="Användarnamn" value={user} onChange={e=>setUser(e.target.value)}/>
+            <input className="p-2 bg-[#071225] rounded" placeholder="Lösenord" type="password" value={pw} onChange={e=>setPw(e.target.value)}/>
+            <div className="flex gap-2">
+              <button className="flex-1 bg-[--accent] py-2 rounded">Logga in</button>
+              <button type="button" onClick={()=>{
+                // quick demo account
+                const name = 'user' + Math.floor(Math.random()*9000+1000);
+                const users = loadUsers(); users[name] = { pw: hashPw('demo'), created: Date.now() }; saveUsers(users);
+                saveSession(name); onLogin(name);
+              }} className="px-3 py-2 bg-white/6 rounded">Demo</button>
+            </div>
           </form>
         );
       }
 
       function RegisterForm({ onRegister }){
-        const [user,setUser] = useState('');
-        const [pw,setPw] = useState('');
-        const [pw2,setPw2] = useState('');
-        function submit(e){
-          e.preventDefault();
-          if(!user.trim()) { alert('Användarnamn krävs'); return; }
-          if(pw.length < 4) { alert('Lösenord minst 4 tecken'); return; }
-          if(pw !== pw2) { alert('Lösenorden matchar inte'); return; }
+        const [u,setU]=useState(''); const [p,setP]=useState(''); const [p2,setP2]=useState('');
+        function submit(e){ e.preventDefault();
+          if(!u.trim()) return alert('Användarnamn krävs');
+          if(p.length < 4) return alert('Lösenord minst 4 tecken');
+          if(p !== p2) return alert('Lösenorden matchar inte');
           const users = loadUsers();
-          if(users[user]) { alert('Användarnamn upptaget'); return; }
-          users[user] = { pw: hashPw(pw), created: Date.now() };
+          if(users[u]) return alert('Användarnamn upptaget');
+          users[u] = { pw: hashPw(p), created: Date.now() };
           saveUsers(users);
-          // ensure new user is included in existing servers as Member (optional)
-          const data = loadData();
-          Object.values(data.servers).forEach(s=>{
-            if(!s.members.includes(user)) { s.members.push(user); s.memberRoles[user] = 'Member'; }
-          });
-          saveData(data);
-          saveUsers(users);
-          saveSession(user);
-          onRegister(user);
+          saveSession(u);
+          onRegister(u);
         }
         return (
           <form onSubmit={submit} className="flex flex-col gap-3">
-            <input value={user} onChange={e=>setUser(e.target.value)} placeholder="Välj användarnamn" className="p-2 bg-[#071225] rounded" />
-            <input value={pw} onChange={e=>setPw(e.target.value)} placeholder="Lösenord" type="password" className="p-2 bg-[#071225] rounded" />
-            <input value={pw2} onChange={e=>setPw2(e.target.value)} placeholder="Bekräfta lösenord" type="password" className="p-2 bg-[#071225] rounded" />
-            <button className="mt-2 bg-[--accent] py-2 rounded">Skapa konto</button>
+            <input className="p-2 bg-[#071225] rounded" placeholder="Välj användarnamn" value={u} onChange={e=>setU(e.target.value)}/>
+            <input className="p-2 bg-[#071225] rounded" placeholder="Lösenord" type="password" value={p} onChange={e=>setP(e.target.value)}/>
+            <input className="p-2 bg-[#071225] rounded" placeholder="Bekräfta lösenord" type="password" value={p2} onChange={e=>setP2(e.target.value)}/>
+            <button className="bg-[--accent] py-2 rounded">Skapa konto</button>
           </form>
         );
       }
 
-      /****************************************
-       * UI: Server Sidebar, Channels, Members
-       ****************************************/
-      function ServerSidebar({ servers, activeServer, setActiveServer, onCreateServer }){
-        return (
-          <div className="w-20 bg-[#071127] p-2 flex flex-col gap-3 items-center border-r border-black/20">
-            <button onClick={()=>setActiveServer(null)} title="Hem (DMs)" className={`w-12 h-12 rounded-full bg-[#0e1420] flex items-center justify-center`}>🏠</button>
-            {Object.values(servers).map(s=>(
-              <div key={s.id} className="relative">
-                <button onClick={()=>setActiveServer(s.id)} title={s.name} className={`server-icon bg-[#0e1420] ${activeServer===s.id ? 'ring-2 ring-white/10' : 'hover:scale-105'}`}>
-                  {s.icon || s.name[0]}
-                </button>
-                {/* unread marker could go here */}
-              </div>
-            ))}
-            <div className="mt-auto">
-              <button onClick={onCreateServer} className="w-12 h-12 rounded-full bg-white/6 flex items-center justify-center">+</button>
-            </div>
-          </div>
-        );
-      }
-
-      function ChannelsPanel({ server, activeChannel, setActiveChannel, onCreateChannel, me }){
-        if(!server) return (
-          <div className="w-64 bg-[#0b1220] p-3 border-r border-black/20 flex items-center">
-            <div className="text-sm text-[#94a3b8]">Välj en server</div>
-          </div>
-        );
-        return (
-          <div className="w-64 bg-[#0b1220] p-3 border-r border-black/20 flex flex-col">
-            <div className="flex justify-between items-center mb-3">
-              <div>
-                <div className="font-bold">{server.name}</div>
-                <div className="text-xs text-[#94a3b8]">{server.members.length} medlemmar</div>
-              </div>
-              <div className="flex gap-2">
-                <button title="Serverinställningar" onClick={()=>document.dispatchEvent(new CustomEvent('openServerSettings',{detail:server.id}))} className="px-2 py-1 rounded bg-white/6">⚙️</button>
-              </div>
-            </div>
-
-            <div className="text-xs text-[#94a3b8] mb-2">TEXTKANALER</div>
-            <div className="flex-1 overflow-auto scrollbar-thin">
-              {Object.values(server.channels).map(ch=>(
-                <div key={ch.id} onClick={()=>setActiveChannel(ch.id)} className={`px-3 py-2 rounded cursor-pointer ${activeChannel===ch.id ? 'bg-white/6' : 'hover:bg-white/5'}`}>
-                  # {ch.name}
-                </div>
-              ))}
-            </div>
-            <div className="mt-3">
-              { (server.owner === me || hasPermission(server, me, 'manage_channels')) ? (
-                <button onClick={onCreateChannel} className="w-full py-2 rounded bg-white/6">+ Ny kanal</button>
-              ) : (
-                <div className="text-xs text-[#94a3b8]">Ingen rätt att skapa kanal</div>
-              )}
-            </div>
-          </div>
-        );
-      }
-
-      function MemberPanel({ server, me, onOpenInviteModal, onAssignRole }) {
-        if(!server) return (
-          <div className="w-64 bg-[#071428] p-3 border-l border-black/20 flex items-center">
-            <div className="text-sm text-[#94a3b8]">Välj en server</div>
-          </div>
-        );
-        return (
-          <div className="w-64 bg-[#071428] p-3 border-l border-black/20 flex flex-col">
-            <div className="flex items-center justify-between mb-2">
-              <div className="font-semibold">Medlemmar</div>
-              { (server.owner === me || hasPermission(server, me, 'invite_members')) ? (
-                <button onClick={()=>onOpenInviteModal()} className="text-xs bg-white/6 px-2 py-1 rounded">Bjud in</button>
-              ) : null }
-            </div>
-
-            <div className="flex-1 overflow-auto scrollbar-thin">
-              {server.members.map(m=>(
-                <div key={m} className="flex items-center justify-between px-2 py-1 hover:bg-white/5 rounded">
-                  <div className="flex items-center gap-2">
-                    <div className="w-8 h-8 rounded-full bg-[#1e2a3a] flex items-center justify-center">{m[0]}</div>
-                    <div>
-                      <div className="font-medium">{m}</div>
-                      <div className="text-xs text-[#94a3b8]">{server.memberRoles?.[m] || 'Member'}</div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-1">
-                    <button onClick={()=>onOpenInviteModal(m)} className="text-xs bg-white/6 px-2 py-1 rounded">DM</button>
-                    { (server.owner === me || hasPermission(server, me, 'manage_roles')) && (
-                      <button onClick={()=>onAssignRole(m)} className="text-xs bg-white/6 px-2 py-1 rounded">Roll</button>
-                    )}
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="mt-3">
-              <div className="text-xs text-[#94a3b8] mb-1">Din användare</div>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="w-10 h-10 rounded-full bg-[#1e2a3a] flex items-center justify-center">{me[0]}</div>
-                  <div>
-                    <div className="font-medium">{me}</div>
-                    <div className="text-xs text-[#94a3b8]">Status: online</div>
-                  </div>
-                </div>
-                <div>
-                  <button onClick={()=>{ saveSession(null); location.reload(); }} className="text-xs bg-red-600/30 px-2 py-1 rounded">Logga ut</button>
-                </div>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      /****************************************
-       * Messages panel & composer
-       ****************************************/
-      function MessagesPanel({ server, channelId, me, onDelete, onReact }) {
-        const ch = server?.channels?.[channelId];
-        const ref = useRef();
-        if(!server) return <div className="flex-1 flex items-center justify-center">Välj en server</div>;
-        if(!ch) return <div className="flex-1 flex items-center justify-center">Välj en kanal</div>;
-
-        function sendMsg(){
-          const v = ref.current.value.trim();
-          if(!v) return;
-          if(!hasPermission(server, me, 'create_messages')) return alert('Ingen rättighet att skicka meddelanden här');
-          const id = Date.now().toString();
-          ch.messages.push({ id, user:me, text:v, ts:new Date().toISOString(), reactions: {} });
-          saveData(dataRef.current);
-          ref.current.value='';
-          window.dispatchEvent(new Event('dataUpdated'));
-        }
-
-        return (
-          <div className="flex-1 flex flex-col">
-            <div className="flex-1 overflow-auto p-6 scrollbar-thin">
-              <div className="max-w-3xl flex flex-col gap-4">
-                {ch.messages.length === 0 && <div className="text-[#94a3b8]">Inga meddelanden än...</div>}
-                {ch.messages.map(m=>(
-                  <div key={m.id} className="flex gap-3">
-                    <div className="w-10 h-10 rounded-full bg-[#20324a] flex items-center justify-center font-semibold">{m.user[0]}</div>
-                    <div className="flex-1">
-                      <div className="flex items-center gap-3">
-                        <div className="font-medium">{m.user}</div>
-                        <div className="text-xs text-[#94a3b8]">{new Date(m.ts).toLocaleTimeString()}</div>
-                        <div className="ml-auto flex gap-2">
-                          { (m.user === me || hasPermission(server, me, 'delete_messages') || server.owner === me) && (
-                            <button onClick={()=>{ if(confirm('Radera meddelande?')) onDelete(ch.id, m.id); }} className="text-xs text-red-400">Radera</button>
-                          )}
-                        </div>
-                      </div>
-                      <div className="mt-1">{m.text}</div>
-                      <div className="mt-2 flex gap-2 items-center">
-                        { Object.entries(m.reactions || {}).map(([emoji,count])=>(
-                          <div key={emoji} className="bg-white/10 px-2 rounded cursor-pointer" onClick={()=>onReact(ch.id, m.id, emoji)}>{emoji} {count}</div>
-                        ))}
-                        <button onClick={()=>{
-                          const e = prompt('Välj emoji att reagera med (ex: 👍,😂,❤️):');
-                          if(e) onReact(ch.id, m.id, e);
-                        }} className="text-xs text-[#94a3b8]">+ Reagera</button>
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-4 border-t border-black/20">
-              <div className="max-w-3xl mx-auto flex gap-2">
-                <textarea ref={ref} placeholder={`Skriv i #${ch.name}...`} className="flex-1 bg-[#071225] rounded px-4 py-2 outline-none resize-none" rows="2"></textarea>
-                <button onClick={sendMsg} className="bg-[--accent] px-4 py-2 rounded">Skicka</button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      /****************************************
-       * Server settings modal (owner / manage_server)
-       ****************************************/
-      function ServerSettingsModal({ serverId, onClose, onSave }) {
-        const d = loadData();
-        const server = d.servers[serverId];
-        const [name, setName] = useState(server?.name || '');
-        const [rolesDef, setRolesDef] = useState(JSON.parse(JSON.stringify(server.roles || {})));
-
-        if(!server) return null;
-
-        function togglePerm(role, perm){
-          const copy = {...rolesDef};
-          copy[role].permissions[perm] = !copy[role].permissions[perm];
-          setRolesDef(copy);
-        }
-        function save(){
-          const dd = loadData();
-          dd.servers[serverId].name = name;
-          dd.servers[serverId].roles = rolesDef;
-          saveData(dd);
-          onSave();
-        }
-
-        return (
-          <div className="modal-backdrop">
-            <div className="bg-[#0b1220] rounded p-6 w-2/3 max-w-3xl">
-              <div className="flex justify-between items-center mb-4">
-                <div className="text-lg font-semibold">Serverinställningar — {server.name}</div>
-                <div className="text-xs text-[#94a3b8]">Ägare: {server.owner}</div>
-              </div>
-
-              <div className="mb-4">
-                <label className="text-xs text-[#94a3b8]">Namn</label>
-                <input value={name} onChange={e=>setName(e.target.value)} className="w-full p-2 bg-[#071225] rounded mt-1"/>
-              </div>
-
-              <div className="mb-4">
-                <div className="font-medium mb-2">Roller & Permissions</div>
-                {Object.keys(rolesDef).map(role => (
-                  <div key={role} className="mb-3 p-3 bg-[#071428] rounded">
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="font-semibold">{role}</div>
-                    </div>
-                    <div className="grid grid-cols-3 gap-2 text-xs">
-                      {['manage_server','manage_roles','manage_channels','delete_messages','create_messages','invite_members'].map(perm => (
-                        <label key={perm} className="flex items-center gap-2">
-                          <input type="checkbox" checked={!!rolesDef[role].permissions[perm]} onChange={()=>togglePerm(role,perm)} />
-                          <span className="capitalize">{perm.replace('_',' ')}</span>
-                        </label>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              <div className="flex justify-end gap-2">
-                <button onClick={onClose} className="px-4 py-2 rounded bg-white/6">Avbryt</button>
-                <button onClick={save} className="px-4 py-2 rounded bg-[--accent]">Spara</button>
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      /****************************************
-       * Invite modal (shows all registered users; owner/admin can invite)
-       ****************************************/
-      function InviteModal({ serverId, me, onClose, onInviteComplete }) {
-        const [allUsers, setAllUsers] = useState(Object.keys(loadUsers()));
-        const [selected, setSelected] = useState(null);
-        const data = loadData();
-        const server = data.servers[serverId];
-
-        useEffect(()=> {
-          setAllUsers(Object.keys(loadUsers()));
-        }, []);
-
-        function invite(userToInvite){
-          if(!server) return;
-          if(server.members.includes(userToInvite)) { alert(userToInvite + ' är redan medlem'); return; }
-          // permission check
-          if(!(server.owner === me || hasPermission(server, me, 'invite_members'))) { alert('Ingen rätt att bjuda in'); return; }
-          const copy = JSON.parse(JSON.stringify(data));
-          copy.servers[serverId].members.push(userToInvite);
-          copy.servers[serverId].memberRoles[userToInvite] = 'Member';
-          saveData(copy);
-          onInviteComplete();
-          alert(userToInvite + ' inbjuden!');
-        }
-
-        return (
-          <div className="modal-backdrop">
-            <div className="bg-[#0b1220] rounded p-4 w-96">
-              <div className="flex justify-between items-center mb-3">
-                <div className="font-semibold">Bjud in användare — {server?.name}</div>
-                <button onClick={onClose} className="px-2 py-1 rounded bg-white/6">Stäng</button>
-              </div>
-              <div className="text-xs text-[#94a3b8] mb-2">Alla registrerade användare</div>
-              <div className="max-h-64 overflow-auto scrollbar-thin">
-                {allUsers.map(u=>(
-                  <div key={u} className="flex items-center justify-between gap-3 px-2 py-1 hover:bg-white/5 rounded">
-                    <div className="flex items-center gap-2">
-                      <div className="w-8 h-8 rounded-full bg-[#1e2a3a] flex items-center justify-center">{u[0]}</div>
-                      <div>
-                        <div className="font-medium">{u}</div>
-                        <div className="text-xs text-[#94a3b8]">{u === me ? 'Du' : 'Registrerad'}</div>
-                      </div>
-                    </div>
-                    <div>
-                      <button onClick={()=>invite(u)} className="text-xs bg-[--accent] px-2 py-1 rounded">Bjud in</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
-        );
-      }
-
-      /****************************************
-       * Global data ref and App
-       ****************************************/
-      const dataRef = { current: loadData() };
-
+      /*** Main App ***/
       function App(){
         const [me, setMe] = useState(loadSession());
-        const [usersState, setUsersState] = useState(loadUsers());
-        const [dataState, setDataState] = useState(loadData());
-        dataRef.current = dataState;
-
-        // UI state
-        const [activeServer, setActiveServer] = useState(Object.keys(dataState.servers)[0] || null);
-        const [activeChannel, setActiveChannel] = useState(() => {
-          const s = dataState.servers[Object.keys(dataState.servers)[0]];
-          return s ? Object.keys(s.channels)[0] : null;
-        });
-        const [showSettingsFor, setShowSettingsFor] = useState(null);
+        const [data, setData] = useState(loadData());
+        const [activeServer, setActiveServer] = useState(null);
+        const [activeCategory, setActiveCategory] = useState(null);
+        const [activeChannel, setActiveChannel] = useState(null); // channel id
+        const [view, setView] = useState('server'); // 'server' or 'dm'
+        const [activeDM, setActiveDM] = useState(null); // dmKey
+        const [showAdmin, setShowAdmin] = useState(false);
         const [showInviteFor, setShowInviteFor] = useState(null);
+        const [showSettingsFor, setShowSettingsFor] = useState(null);
+        const [typingTick, setTypingTick] = useState(0);
 
-        // listen for external events
+        // keep session / data in sync across tabs
+        useEffect(()=> {
+          function onStorage(e){
+            if(e.key === DATA_KEY) setData(loadData());
+            if(e.key === SESSION_KEY) setMe(loadSession());
+          }
+          window.addEventListener('storage', onStorage);
+          return ()=>window.removeEventListener('storage', onStorage);
+        },[]);
+
+        useEffect(()=> { saveData(data); }, [data]);
+
+        // Admin keyboard shortcut: Ctrl + Alt + Tab
+        useEffect(()=> {
+          function handler(e){
+            if(e.ctrlKey && e.altKey && e.key === 'Tab'){
+              const pw = prompt('Admin-lösenord:');
+              if(pw === ADMIN_PW) setShowAdmin(true);
+              else alert('Fel lösenord');
+            }
+          }
+          window.addEventListener('keydown', handler);
+          return ()=>window.removeEventListener('keydown', handler);
+        },[]);
+
+        // typing indicator cleanup tick
         useEffect(()=>{
-          function onUpdate(){ const fresh = loadData(); setDataState(fresh); dataRef.current = fresh; }
-          window.addEventListener('dataUpdated', onUpdate);
-          function onOpenSettings(e){ setShowSettingsFor(e.detail); }
-          document.addEventListener('openServerSettings', onOpenSettings);
-          return ()=>{ window.removeEventListener('dataUpdated', onUpdate); document.removeEventListener('openServerSettings', onOpenSettings); };
-        }, []);
+          const t = setInterval(()=> setTypingTick(t=>t+1), 2000);
+          return ()=>clearInterval(t);
+        },[]);
 
-        // persist when states change
-        useEffect(()=>{ saveData(dataState); }, [dataState]);
-        useEffect(()=>{ saveUsers(usersState); }, [usersState]);
+        // if not logged in -> show auth
+        if(!me) return <Auth onLogin={(u)=>{ setMe(u); /* ensure user exists in users list */ const us = loadUsers(); if(!us[u]){ us[u] = { pw: hashPw('demo'), created: Date.now() }; saveUsers(us); } /* ensure member membership not auto-added to servers */ }} />;
 
-        // login handler
-        function handleLogin(user){
-          setMe(user);
-          saveSession(user);
-          // ensure user is member of existing servers
-          const copy = JSON.parse(JSON.stringify(dataState));
-          Object.values(copy.servers).forEach(s=>{
-            if(!s.members.includes(user)){ s.members.push(user); s.memberRoles[user] = 'Member'; }
-          });
-          setDataState(copy);
+        // helper getters
+        function getServer(sid){ return data.servers[sid] || null; }
+        function getChannelById(sid, cid){
+          const s = getServer(sid);
+          if(!s) return null;
+          for(const catId of Object.keys(s.categories || {})){
+            const cat = s.categories[catId];
+            const ch = (cat.channels || []).find(c=>c.id===cid);
+            if(ch) return ch;
+          }
+          return null;
         }
 
-        function handleRegister(user, pw){
-          const us = {...usersState};
-          us[user] = { pw: hashPw(pw), created: Date.now() };
-          setUsersState(us);
-        }
-
+        // create server
         function createServer(){
           const name = prompt('Namn på server:');
           if(!name) return;
-          const id = name.toLowerCase().replace(/\s+/g,'_') + '_' + Math.floor(Math.random()*10000);
-          const copy = JSON.parse(JSON.stringify(dataState));
+          const id = name.toLowerCase().replace(/\s+/g,'_') + '_' + Math.floor(Math.random()*9000);
+          const copy = JSON.parse(JSON.stringify(data));
           copy.servers[id] = {
             id, name, icon: name[0].toUpperCase(),
             owner: me,
-            roles: JSON.parse(JSON.stringify(defaultData().servers.home.roles)),
+            roles: {
+              Owner: { permissions: { manage_server:true, manage_roles:true, manage_channels:true, delete_messages:true, create_messages:true, invite_members:true } },
+              Admin: { permissions: { manage_server:false, manage_roles:false, manage_channels:true, delete_messages:true, create_messages:true, invite_members:true } },
+              Mod: { permissions: { manage_server:false, manage_roles:false, manage_channels:false, delete_messages:true, create_messages:true, invite_members:false } },
+              Member: { permissions: { manage_server:false, manage_roles:false, manage_channels:false, delete_messages:false, create_messages:true, invite_members:false } }
+            },
             members: [me],
             memberRoles: { [me]:'Owner' },
-            channels: { general: { id:'general', name:'general', messages:[] } },
-            invites: []
+            categories: {}, // categories map
+            invites: {}
           };
-          setDataState(copy);
+          // create default category & channel
+          const catId = uid('cat');
+          copy.servers[id].categories[catId] = { id:catId, name:'TEXT CHANNELS', collapsed:false, channels: [ { id:'general', name:'general', type:'text', messages:[], pins:[], voiceMembers:[] } ] };
+          setData(copy);
           setActiveServer(id);
+          setActiveCategory(catId);
           setActiveChannel('general');
         }
 
-        function createChannel(){
-          if(!activeServer) return alert('Välj server');
-          const server = dataState.servers[activeServer];
-          if(!(server.owner === me || hasPermission(server, me, 'manage_channels'))) return alert('Ingen rätt att skapa kanal');
-          const name = prompt('Namn på kanal (utan mellanslag):');
-          if(!name) return;
-          const copy = JSON.parse(JSON.stringify(dataState));
-          copy.servers[activeServer].channels[name] = { id:name, name, messages:[] };
-          setDataState(copy);
-          setActiveChannel(name);
+        // create category
+        function createCategory(){
+          if(!activeServer) return alert('Välj en server');
+          const s = getServer(activeServer);
+          if(!(s.owner === me || s.roles?.[s.memberRoles?.[me]]?.permissions?.manage_channels)) return alert('Ingen rätt att skapa kategori');
+          const name = prompt('Namn på kategori:') || 'Ny kategori';
+          const copy = JSON.parse(JSON.stringify(data));
+          const catId = uid('cat');
+          copy.servers[activeServer].categories[catId] = { id:catId, name, collapsed:false, channels: [] };
+          setData(copy);
         }
 
-        function deleteMessage(channelId, msgId){
-          const copy = JSON.parse(JSON.stringify(dataState));
-          const ch = copy.servers[activeServer].channels[channelId];
+        // create channel (text or voice)
+        function createChannel(catId){
+          if(!activeServer) return alert('Välj en server');
+          const s = getServer(activeServer);
+          if(!(s.owner === me || s.roles?.[s.memberRoles?.[me]]?.permissions?.manage_channels)) return alert('Ingen rätt att skapa kanal');
+          const name = prompt('Namn på kanal (utan mellanslag):');
+          if(!name) return;
+          const type = prompt('Typ (text/voice):', 'text') || 'text';
+          const copy = JSON.parse(JSON.stringify(data));
+          const ch = { id: name, name, type: type === 'voice' ? 'voice' : 'text', messages:[], pins:[], voiceMembers: [] };
+          copy.servers[activeServer].categories[catId].channels.push(ch);
+          setData(copy);
+        }
+
+        // invite user
+        function inviteToServer(serverId){
+          const allUsers = Object.keys(loadUsers());
+          const sel = prompt('Ange användarnamn att bjuda in:\n(Se registrerade användare i console eller implementera invite dialog)');
+          if(!sel) return;
+          const users = loadUsers();
+          if(!users[sel]) return alert('Ingen sådan registrerad användare');
+          const copy = JSON.parse(JSON.stringify(data));
+          const srv = copy.servers[serverId];
+          if(srv.members.includes(sel)) return alert('Användaren är redan medlem');
+          srv.members.push(sel);
+          srv.memberRoles[sel] = 'Member';
+          saveData(copy); setData(copy);
+          alert(sel + ' inbjuden');
+        }
+
+        // join voice channel (simulated)
+        function joinVoice(catId, channelId){
+          const copy = JSON.parse(JSON.stringify(data));
+          const ch = copy.servers[activeServer].categories[catId].channels.find(c=>c.id===channelId);
+          if(!ch || ch.type !== 'voice') return;
+          if(!ch.voiceMembers.includes(me)) ch.voiceMembers.push(me);
+          setData(copy);
+        }
+        function leaveVoice(catId, channelId){
+          const copy = JSON.parse(JSON.stringify(data));
+          const ch = copy.servers[activeServer].categories[catId].channels.find(c=>c.id===channelId);
+          if(!ch || ch.type !== 'voice') return;
+          ch.voiceMembers = ch.voiceMembers.filter(x=>x!==me);
+          setData(copy);
+        }
+
+        // send text message to channel
+        function sendChannelMessage(catId, channelId, text){
+          const s = getServer(activeServer);
+          if(!s) return;
+          const role = s.memberRoles?.[me] || 'Member';
+          const can = s.roles?.[role]?.permissions?.create_messages;
+          if(!can) return alert('Ingen rätt att skriva i den här kanalen');
+          const copy = JSON.parse(JSON.stringify(data));
+          const ch = copy.servers[activeServer].categories[catId].channels.find(c=>c.id===channelId);
+          if(!ch) return;
+          ch.messages.push({ id: uid('m'), user: me, text, ts: new Date().toISOString(), reactions:{}, pinned:false });
+          setData(copy);
+        }
+
+        // delete message
+        function deleteChannelMessage(catId, channelId, msgId){
+          const s = getServer(activeServer);
+          if(!s) return;
+          const role = s.memberRoles?.[me] || 'Member';
+          const canDelete = (s.owner === me) || s.roles?.[role]?.permissions?.delete_messages;
+          const copy = JSON.parse(JSON.stringify(data));
+          const ch = copy.servers[activeServer].categories[catId].channels.find(c=>c.id===channelId);
           if(!ch) return;
           const idx = ch.messages.findIndex(m=>m.id===msgId);
           if(idx === -1) return;
+          if(ch.messages[idx].user !== me && !canDelete) return alert('Ingen rätt att radera det här meddelandet');
           ch.messages.splice(idx,1);
-          setDataState(copy);
+          setData(copy);
         }
 
-        function assignRoleToMember(targetUser){
-          const server = dataState.servers[activeServer];
-          if(!server) return;
-          if(server.owner !== me && !hasPermission(server, me, 'manage_roles')) return alert('Ingen rätt att tilldela roller');
-          const role = prompt('Ange roll för '+targetUser+' (Owner/Admin/Mod/Member):');
-          if(!role) return;
-          if(!server.roles[role]) return alert('Okänd roll');
-          const copy = JSON.parse(JSON.stringify(dataState));
-          copy.servers[activeServer].memberRoles[targetUser] = role;
-          setDataState(copy);
-        }
-
-        function openInviteModal(serverId){
-          setShowInviteFor(serverId);
-        }
-
-        function inviteComplete(){
-          setShowInviteFor(null);
-          setDataState(loadData());
-        }
-
-        function deleteServer(serverId){
-          const s = dataState.servers[serverId];
+        // pin/unpin
+        function togglePin(catId, channelId, msgId){
+          const s = getServer(activeServer);
           if(!s) return;
-          if(s.owner !== me && !hasPermission(s, me, 'manage_server')) return alert('Ingen rätt att ta bort servern');
-          if(!confirm('Radera server '+s.name+'?')) return;
-          const copy = JSON.parse(JSON.stringify(dataState));
-          delete copy.servers[serverId];
-          setDataState(copy);
-          const keys = Object.keys(copy.servers);
-          setActiveServer(keys[0] || null);
-          setActiveChannel(keys[0] ? Object.keys(copy.servers[keys[0]].channels)[0] : null);
-        }
-
-        function reactMessage(channelId, msgId, emoji){
-          const copy = JSON.parse(JSON.stringify(dataState));
-          const ch = copy.servers[activeServer].channels[channelId];
+          const copy = JSON.parse(JSON.stringify(data));
+          const ch = copy.servers[activeServer].categories[catId].channels.find(c=>c.id===channelId);
           if(!ch) return;
           const m = ch.messages.find(x=>x.id===msgId);
           if(!m) return;
-          m.reactions = m.reactions || {};
-          m.reactions[emoji] = (m.reactions[emoji] || 0) + 1;
-          setDataState(copy);
+          m.pinned = !m.pinned;
+          setData(copy);
         }
 
-        // Save server settings callback
-        function onSettingsSaved(){ setShowSettingsFor(null); setDataState(loadData()); }
+        // react
+        function reactChannelMessage(catId, channelId, msgId, emoji){
+          const copy = JSON.parse(JSON.stringify(data));
+          const ch = copy.servers[activeServer].categories[catId].channels.find(c=>c.id===channelId);
+          const m = ch.messages.find(x=>x.id===msgId);
+          m.reactions = m.reactions || {};
+          m.reactions[emoji] = (m.reactions[emoji] || 0) + 1;
+          setData(copy);
+        }
 
-        // Show list of all registered users in a small panel? We'll keep invite modal for invites
-        // Render login if not logged in
-        if(!me) return <Auth onLogin={(u)=>{ handleLogin(u); }} />;
+        // typing indicator: on keydown set data.typing[roomKey] = { user, ts }
+        function setTyping(roomKey){
+          const copy = JSON.parse(JSON.stringify(data));
+          copy.typing = copy.typing || {};
+          copy.typing[roomKey] = { user: me, ts: Date.now() };
+          setData(copy);
+        }
+        function typingUsers(roomKey){
+          const t = (data.typing && data.typing[roomKey]) ? data.typing[roomKey] : null;
+          if(!t) return null;
+          if(Date.now() - t.ts > 5000) return null; // stale
+          return t.user;
+        }
 
-        const activeServerObj = activeServer ? dataState.servers[activeServer] : null;
+        // DM functions
+        function openDMWith(user){
+          const key = dmKey(me, user);
+          const copy = JSON.parse(JSON.stringify(data));
+          if(!copy.dms) copy.dms = {};
+          if(!copy.dms[key]) copy.dms[key] = [];
+          setData(copy);
+          setActiveDM(key);
+          setView('dm');
+        }
+        function sendDMMessage(key, text){
+          const copy = JSON.parse(JSON.stringify(data));
+          copy.dms[key] = copy.dms[key] || [];
+          copy.dms[key].push({ id: uid('m'), user: me, text, ts: new Date().toISOString(), reactions:{} });
+          setData(copy);
+        }
+        function deleteDMMessage(key,msgId){
+          const copy = JSON.parse(JSON.stringify(data));
+          copy.dms[key] = (copy.dms[key] || []).filter(m=>m.id!==msgId);
+          setData(copy);
+        }
+        function reactDM(key,msgId,emoji){
+          const copy = JSON.parse(JSON.stringify(data));
+          const m = copy.dms[key].find(x=>x.id===msgId);
+          m.reactions = m.reactions || {};
+          m.reactions[emoji] = (m.reactions[emoji] || 0) + 1;
+          setData(copy);
+        }
 
-        return (
-          <div className="flex h-screen">
-            <ServerSidebar servers={dataState.servers} activeServer={activeServer} setActiveServer={(s)=>{ setActiveServer(s); setActiveChannel(null); }} onCreateServer={createServer} />
+        // server settings change
+        function openServerSettings(serverId){
+          setShowSettingsFor(serverId);
+        }
+        function saveServerSettings(serverId, newName, newIcon){
+          const copy = JSON.parse(JSON.stringify(data));
+          copy.servers[serverId].name = newName;
+          copy.servers[serverId].icon = newIcon;
+          setData(copy);
+          setShowSettingsFor(null);
+        }
 
-            <ChannelsPanel server={activeServerObj} activeChannel={activeChannel} setActiveChannel={(c)=>setActiveChannel(c)} onCreateChannel={createChannel} me={me} />
+        // delete server
+        function deleteServer(serverId){
+          const s = getServer(serverId);
+          if(!s) return;
+          if(s.owner !== me && !s.roles?.[s.memberRoles?.[me]]?.permissions?.manage_server) return alert('Ingen rätt att ta bort servern');
+          if(!confirm('Radera server '+s.name+'?')) return;
+          const copy = JSON.parse(JSON.stringify(data));
+          delete copy.servers[serverId];
+          setData(copy);
+          setActiveServer(null);
+          setActiveCategory(null);
+          setActiveChannel(null);
+        }
 
-            <div className="flex-1 flex flex-col">
-              <div className="flex justify-between items-center px-6 py-4 border-b border-black/30">
-                <div>
-                  {activeServerObj ? <div className="text-lg font-semibold">{activeServerObj.name} — {activeChannel || ''}</div> : <div className="text-lg font-semibold">Hem (DMs)</div>}
-                  <div className="text-xs text-[#94a3b8]">{activeServerObj ? `Ägare: ${activeServerObj.owner}` : 'Direktmeddelanden'}</div>
+        // UI pieces
+        function ServerList(){
+          return (
+            <div className="w-20 bg-[#071127] p-2 flex flex-col gap-3 items-center border-r border-black/20">
+              <button onClick={()=>{ setActiveServer(null); setView('dm'); setActiveDM(null); }} title="Hem (DMs)" className={`w-12 h-12 rounded-full bg-[#0e1420] flex items-center justify-center`}>🏠</button>
+              {Object.values(data.servers).map(s=>(
+                <div key={s.id}>
+                  <button title={s.name} onClick={()=>{ setActiveServer(s.id); setView('server'); setActiveDM(null); /* choose first category/channel */ const catKeys = Object.keys(s.categories||{}); if(catKeys.length){ setActiveCategory(catKeys[0]); const ch = s.categories[catKeys[0]].channels[0]; if(ch) setActiveChannel(ch.id); }} } className={`server-icon bg-[#0e1420] ${activeServer===s.id ? 'ring-2 ring-white/10' : 'hover:scale-105'}`}>{s.icon || s.name[0]}</button>
                 </div>
-                <div className="flex items-center gap-3">
-                  {activeServerObj && activeServerObj.owner === me && <button onClick={()=>setShowSettingsFor(activeServerObj.id)} className="px-3 py-1 rounded bg-white/6">Inställningar</button>}
-                  {activeServerObj && <button onClick={()=>deleteServer(activeServerObj.id)} className="px-3 py-1 rounded bg-red-600/30">Radera</button>}
-                  <div className="text-xs text-[#94a3b8]">Inloggad som {me}</div>
+              ))}
+              <div className="mt-auto">
+                <button onClick={createServer} className="w-12 h-12 rounded-full bg-white/6 flex items-center justify-center">+</button>
+              </div>
+            </div>
+          );
+        }
+
+        // Channels + categories panel
+        function ChannelsPanel(){
+          if(!activeServer) return (
+            <div className="w-64 bg-[#0b1220] p-3 border-r border-black/20 flex items-center">
+              <div className="text-sm text-[#94a3b8]">Välj en server eller gå till Hem (DMs)</div>
+            </div>
+          );
+          const s = getServer(activeServer);
+          return (
+            <div className="w-64 bg-[#0b1220] p-3 border-r border-black/20 flex flex-col">
+              <div className="flex justify-between items-center mb-3">
+                <div>
+                  <div className="font-bold">{s.name}</div>
+                  <div className="text-xs text-[#94a3b8]">{s.members.length} medlemmar</div>
+                </div>
+                <div className="flex gap-2">
+                  <button onClick={()=>openServerSettings(s.id)} className="px-2 py-1 rounded bg-white/6">⚙️</button>
+                  <button onClick={()=>deleteServer(s.id)} className="px-2 py-1 rounded bg-red-600/30">Radera</button>
                 </div>
               </div>
 
-              <MessagesPanel server={activeServerObj} channelId={activeChannel} me={me} onDelete={deleteMessage} onReact={reactMessage} />
+              <div className="mb-2">
+                <div className="text-xs text-[#94a3b8]">Kategorier</div>
+                <div className="flex flex-col gap-1">
+                  {Object.values(s.categories || {}).map(cat => (
+                    <div key={cat.id}>
+                      <div className="category-header flex items-center justify-between">
+                        <div className="flex items-center gap-2 cursor-pointer" onClick={()=>{ const copy = JSON.parse(JSON.stringify(data)); copy.servers[activeServer].categories[cat.id].collapsed = !copy.servers[activeServer].categories[cat.id].collapsed; setData(copy); }}>
+                          <span>{cat.collapsed ? '▸' : '▾'}</span>
+                          <span className="text-xs">{cat.name}</span>
+                        </div>
+                        <div className="flex gap-1">
+                          <button onClick={()=>{ if(confirm('Skapa kanal i '+cat.name+'?')) createChannel(cat.id); }} className="text-xs bg-white/6 px-2 py-1 rounded">+ kanal</button>
+                        </div>
+                      </div>
+                      {!cat.collapsed && (
+                        <div className="pl-3">
+                          {cat.channels.map(ch => (
+                            <div key={ch.id} onClick={()=>{ setActiveCategory(cat.id); setActiveChannel(ch.id); setView('server'); }} className={`px-2 py-1 rounded cursor-pointer ${activeChannel===ch.id ? 'bg-white/6' : 'hover:bg-white/5'}`}>
+                              {ch.type === 'voice' ? '🔊 ' : '# '}{ch.name}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2">
+                  <button onClick={createCategory} className="w-full py-2 rounded bg-white/6">+ Ny kategori</button>
+                </div>
+              </div>
             </div>
+          );
+        }
 
-            <MemberPanel server={activeServerObj} me={me} onOpenInviteModal={()=>openInviteModal(activeServer)} onAssignRole={assignRoleToMember} />
+        // Members panel (right)
+        function MembersPanel(){
+          if(!activeServer) return (
+            <div className="w-64 bg-[#071428] p-3 border-l border-black/20">
+              <div className="text-sm text-[#94a3b8]">Hem / DMs</div>
+            </div>
+          );
+          const s = getServer(activeServer);
+          return (
+            <div className="w-64 bg-[#071428] p-3 border-l border-black/20 flex flex-col">
+              <div className="flex justify-between items-center mb-2">
+                <div className="font-semibold">Medlemmar</div>
+                <div className="text-xs text-[#94a3b8]">Invites</div>
+              </div>
+              <div className="flex-1 overflow-auto scrollbar-thin">
+                {s.members.map(m => (
+                  <div key={m} className="flex items-center justify-between px-2 py-1 hover:bg-white/5 rounded">
+                    <div className="flex items-center gap-2">
+                      <div className="w-8 h-8 rounded-full bg-[#1e2a3a] flex items-center justify-center">{m[0]}</div>
+                      <div>
+                        <div className="font-medium">{m}</div>
+                        <div className="text-xs text-[#94a3b8]">{s.memberRoles?.[m] || 'Member'}</div>
+                      </div>
+                    </div>
+                    <div className="flex gap-1">
+                      <button onClick={()=>openDMWith(m)} className="text-xs bg-white/6 px-2 py-1 rounded">DM</button>
+                      {(s.owner === me || s.roles?.[s.memberRoles?.[me]]?.permissions?.manage_roles) && <button onClick={()=>{ const role = prompt('Ange roll (Owner/Admin/Mod/Member):'); if(role){ const copy = JSON.parse(JSON.stringify(data)); copy.servers[activeServer].memberRoles[m] = role; setData(copy); } }} className="text-xs bg-white/6 px-2 py-1 rounded">Roll</button>}
+                      {(s.owner === me || s.roles?.[s.memberRoles?.[me]]?.permissions?.invite_members) && <button onClick={()=>inviteToServer(activeServer)} className="text-xs bg-[--accent] px-2 py-1 rounded">Bjud in</button>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-3">
+                <div className="text-xs text-[#94a3b8] mb-1">Din användare</div>
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <div className="w-10 h-10 rounded-full bg-[#1e2a3a] flex items-center justify-center">{me[0]}</div>
+                    <div>
+                      <div className="font-medium">{me}</div>
+                      <div className="text-xs text-[#94a3b8]">Status: Online</div>
+                    </div>
+                  </div>
+                  <div>
+                    <button onClick={()=>{ saveSession(null); location.reload(); }} className="text-xs bg-red-600/30 px-2 py-1 rounded">Logga ut</button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
 
-            { showSettingsFor && <ServerSettingsModal serverId={showSettingsFor} onClose={()=>setShowSettingsFor(null)} onSave={onSettingsSaved} /> }
-            { showInviteFor && <InviteModal serverId={showInviteFor} me={me} onClose={()=>setShowInviteFor(null)} onInviteComplete={inviteComplete} /> }
+        // Central view: channel or DM
+        function CenterPanel(){
+          if(view === 'dm'){
+            const msgs = (data.dms && data.dms[activeDM]) ? data.dms[activeDM] : [];
+            const other = activeDM ? activeDM.split('|').find(x=>x!==me) : null;
+            return (
+              <div className="flex-1 flex flex-col">
+                <div className="px-6 py-4 border-b border-black/30 flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">DM — {other}</div>
+                    <div className="text-xs text-[#94a3b8]">Privat</div>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-auto p-6 scrollbar-thin">
+                  <div className="max-w-3xl flex flex-col gap-4">
+                    {msgs.length === 0 && <div className="text-[#94a3b8]">Inga meddelanden än...</div>}
+                    {msgs.map(m => (
+                      <div key={m.id} className="flex gap-3">
+                        <div className="w-10 h-10 rounded-full bg-[#20324a] flex items-center justify-center font-semibold">{m.user[0]}</div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <div className="font-medium">{m.user}</div>
+                            <div className="text-xs text-[#94a3b8]">{new Date(m.ts).toLocaleTimeString()}</div>
+                            <div className="ml-auto">
+                              {m.user === me && <button onClick={()=>{ if(confirm('Radera?')) deleteDMMessage(activeDM, m.id); }} className="text-xs text-red-400">Radera</button>}
+                            </div>
+                          </div>
+                          <div className="mt-1">{m.text}</div>
+                          <div className="mt-1 flex gap-2">
+                            {Object.entries(m.reactions || {}).map(([e,c]) => <div key={e} className="bg-white/10 px-2 rounded cursor-pointer" onClick={()=>reactDM(activeDM, m.id, e)}>{e} {c}</div>)}
+                            <button onClick={()=>{ const e = prompt('Emoji:'); if(e) reactDM(activeDM, m.id, e); }} className="text-xs text-[#94a3b8]">+ Reagera</button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <Composer onSend={(t)=>sendDMMessage(activeDM,t)} onTyping={()=>{ const key = 'dm|' + activeDM; const copy = JSON.parse(JSON.stringify(data)); copy.typing = copy.typing || {}; copy.typing[key] = { user: me, ts: Date.now() }; setData(copy); }} typing={typingUsers('dm|' + activeDM)} />
+              </div>
+            );
+          }
+
+          // server view
+          if(!activeServer) return (
+            <div className="flex-1 flex items-center justify-center text-[#94a3b8]">Välj en server eller starta en ny.</div>
+          );
+          const s = getServer(activeServer);
+          if(!activeCategory || !activeChannel) return (
+            <div className="flex-1 flex items-center justify-center text-[#94a3b8]">Välj en kanal.</div>
+          );
+          const ch = getChannelById(activeServer, activeChannel);
+          if(!ch) return <div className="flex-1 flex items-center justify-center">Kanal inte hittad</div>;
+          if(ch.type === 'voice'){
+            return (
+              <div className="flex-1 flex flex-col">
+                <div className="px-6 py-4 border-b border-black/30 flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">🔊 {ch.name}</div>
+                    <div className="text-xs text-[#94a3b8]">Röstkanal — {ch.voiceMembers.length} online</div>
+                  </div>
+                  <div>
+                    {ch.voiceMembers.includes(me) ? <button onClick={()=>leaveVoice(activeCategory, ch.id)} className="px-3 py-1 rounded bg-red-600/30">Lämna</button> : <button onClick={()=>joinVoice(activeCategory, ch.id)} className="px-3 py-1 rounded bg-[--accent]">Gå med</button>}
+                  </div>
+                </div>
+                <div className="flex-1 overflow-auto p-6">
+                  <div className="max-w-3xl">
+                    <div className="font-medium mb-3">Deltagare</div>
+                    {ch.voiceMembers.length === 0 && <div className="text-[#94a3b8]">Ingen i kanalen</div>}
+                    {ch.voiceMembers.map(u => <div key={u} className="flex items-center gap-3 mb-2"><div className="w-8 h-8 rounded-full bg-[#1e2a3a] flex items-center justify-center">{u[0]}</div><div>{u} {u===me && <span className="text-xs text-[#94a3b8]"> (du)</span>}</div></div>)}
+                    <div className="mt-4 text-xs text-[#94a3b8]">Observera: röst är simulerat — ingen faktiskt ljudöverföring.</div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+
+          // text channel
+          return (
+            <div className="flex-1 flex flex-col">
+              <div className="px-6 py-4 border-b border-black/30 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold">#{ch.name}</div>
+                  <div className="text-xs text-[#94a3b8]">{s.name}</div>
+                </div>
+                <div className="text-xs text-[#94a3b8]">{typingUsers(activeServer + '|' + activeChannel) ? `${typingUsers(activeServer + '|' + activeChannel)} skriver...` : ''}</div>
+              </div>
+
+              <div className="flex-1 overflow-auto p-6 scrollbar-thin">
+                <div className="max-w-3xl flex flex-col gap-4">
+                  {ch.messages.length === 0 && <div className="text-[#94a3b8]">Inga meddelanden än</div>}
+                  {ch.messages.map(m => (
+                    <div key={m.id} className="flex gap-3">
+                      <div className="w-10 h-10 rounded-full bg-[#20324a] flex items-center justify-center font-semibold">{m.user[0]}</div>
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2">
+                          <div className="font-medium">{m.user}</div>
+                          <div className="text-xs text-[#94a3b8]">{new Date(m.ts).toLocaleTimeString()}</div>
+                          <div className="ml-auto flex gap-2">
+                            <button onClick={()=>{ togglePin(activeCategory, ch.id, m.id); }} className="text-xs bg-white/6 px-2 py-1 rounded">{m.pinned ? 'Unpin' : 'Pin'}</button>
+                            { (m.user === me || s.owner === me || s.roles?.[s.memberRoles?.[me]]?.permissions?.delete_messages) && <button onClick={()=>{ if(confirm('Radera meddelande?')) deleteChannelMessage(activeCategory, ch.id, m.id); }} className="text-xs text-red-400">Radera</button> }
+                          </div>
+                        </div>
+                        <div className="mt-1">{m.text}</div>
+                        <div className="mt-1 flex gap-2 items-center">
+                          {Object.entries(m.reactions || {}).map(([e,c]) => <div key={e} className="bg-white/10 px-2 rounded cursor-pointer" onClick={()=>reactChannelMessage(activeCategory, ch.id, m.id, e)}>{e} {c}</div>)}
+                          <button onClick={()=>{ const e = prompt('Emoji:'); if(e) reactChannelMessage(activeCategory, ch.id, m.id, e); }} className="text-xs text-[#94a3b8]">+ Reagera</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <Composer onSend={(t)=>{ sendChannelMessage(activeCategory, ch.id, t); }} onTyping={()=>{ const key = activeServer + '|' + activeChannel; const copy = JSON.parse(JSON.stringify(data)); copy.typing = copy.typing || {}; copy.typing[key] = { user: me, ts: Date.now() }; setData(copy); }} typing={typingUsers(activeServer + '|' + activeChannel)} />
+            </div>
+          );
+        }
+
+        // composer component
+        function Composer({ onSend, onTyping, typing }){
+          const ref = useRef();
+          function send(){ const v = ref.current.value.trim(); if(!v) return; onSend(v); ref.current.value=''; }
+          return (
+            <div className="p-4 border-t border-black/20">
+              <div className="max-w-3xl mx-auto flex gap-2">
+                <textarea ref={ref} rows="2" placeholder="Skriv ett meddelande..." className="flex-1 bg-[#071225] rounded px-4 py-2 resize-none" onKeyDown={(e)=>{ if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); send(); } else { onTyping && onTyping(); } }}></textarea>
+                <button onClick={send} className="bg-[--accent] px-4 py-2 rounded">Skicka</button>
+              </div>
+            </div>
+          );
+        }
+
+        // settings modal
+        function ServerSettingsModal({ serverId, onClose }){
+          const s = getServer(serverId);
+          const [name, setName] = useState(s.name);
+          const [icon, setIcon] = useState(s.icon || s.name[0]);
+          function save(){ saveServerSettings(serverId, name, icon); }
+          function manageRoles(){
+            const role = prompt('Rollens namn att ändra (Owner/Admin/Mod/Member):');
+            if(!role) return;
+            const perms = s.roles[role].permissions;
+            const keys = Object.keys(perms);
+            const updated = {};
+            keys.forEach(k => {
+              const val = confirm('Sätt permission "'+k+'" till true? (OK = true, Avbryt = false)');
+              updated[k] = val;
+            });
+            const copy = JSON.parse(JSON.stringify(data));
+            copy.servers[serverId].roles[role].permissions = updated;
+            setData(copy);
+            alert('Sparat');
+          }
+          return (
+            <div className="modal-backdrop">
+              <div className="bg-[#0b1220] rounded p-4 w-2/3 max-w-2xl">
+                <div className="flex justify-between items-center mb-3">
+                  <div className="font-semibold">Serverinställningar — {s.name}</div>
+                  <div className="flex gap-2">
+                    <button onClick={manageRoles} className="px-2 py-1 bg-white/6 rounded">Ändra roller</button>
+                    <button onClick={onClose} className="px-2 py-1 bg-red-600/30 rounded">Stäng</button>
+                  </div>
+                </div>
+
+                <div className="mb-3">
+                  <label className="text-xs text-[#94a3b8]">Namn</label>
+                  <input value={name} onChange={e=>setName(e.target.value)} className="w-full p-2 bg-[#071225] rounded mt-1"/>
+                </div>
+                <div className="mb-3">
+                  <label className="text-xs text-[#94a3b8]">Icon</label>
+                  <input value={icon} onChange={e=>setIcon(e.target.value)} className="w-full p-2 bg-[#071225] rounded mt-1"/>
+                </div>
+
+                <div className="flex justify-end gap-2">
+                  <button onClick={onClose} className="px-3 py-2 bg-white/6 rounded">Avbryt</button>
+                  <button onClick={save} className="px-3 py-2 bg-[--accent] rounded">Spara</button>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Invite modal (select from registered users)
+        function InviteModal({ serverId, onClose }){
+          const [all, setAll] = useState(Object.keys(loadUsers()));
+          function invite(u){
+            if(!confirm('Bjud in '+u+'?')) return;
+            const copy = JSON.parse(JSON.stringify(data));
+            const s = copy.servers[serverId];
+            if(!s.members.includes(u)){ s.members.push(u); s.memberRoles[u] = 'Member'; setData(copy); alert(u+' inbjuden'); }
+            else alert('Redan medlem');
+            onClose();
+          }
+          return (
+            <div className="modal-backdrop">
+              <div className="bg-[#0b1220] rounded p-4 w-96">
+                <div className="flex justify-between items-center mb-2">
+                  <div className="font-semibold">Bjud in användare</div>
+                  <button onClick={onClose} className="px-2 py-1 bg-white/6 rounded">Stäng</button>
+                </div>
+                <div className="max-h-72 overflow-auto scrollbar-thin">
+                  {all.map(u=>(
+                    <div key={u} className="flex items-center justify-between px-2 py-1 hover:bg-white/5 rounded">
+                      <div className="flex items-center gap-2">
+                        <div className="w-8 h-8 rounded-full bg-[#1e2a3a] flex items-center justify-center">{u[0]}</div>
+                        <div>
+                          <div className="font-medium">{u}</div>
+                          <div className="text-xs text-[#94a3b8]">Registrerad</div>
+                        </div>
+                      </div>
+                      <div>
+                        <button onClick={()=>invite(u)} className="px-2 py-1 bg-[--accent] rounded">Bjud in</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        return (
+          <div className="flex h-screen">
+            <ServerList />
+            <ChannelsPanel />
+            <CenterPanel />
+            <MembersPanel />
+            { showAdmin && <AdminPanel onClose={()=>setShowAdmin(false)} /> }
+            { showInviteFor && <InviteModal serverId={showInviteFor} onClose={()=>setShowInviteFor(null)} /> }
+            { showSettingsFor && <ServerSettingsModal serverId={showSettingsFor} onClose={()=>setShowSettingsFor(null)} /> }
           </div>
         );
       }
 
-      /****************************************
-       * Boot: create minimal initial user (Anna) if none exist
-       ****************************************/
-      (function bootstrap(){
-        const users = loadUsers();
-        if(Object.keys(users).length === 0){
-          // create a few demo users so UI isn't empty
-          users['Anna'] = { pw: hashPw('demo'), created: Date.now() };
-          users['Björn'] = { pw: hashPw('demo'), created: Date.now() };
-          users['Cara'] = { pw: hashPw('demo'), created: Date.now() };
-          saveUsers(users);
-        }
-        const data = loadData();
-        // ensure member lists include registered users as Member if not already present
-        const regUsers = Object.keys(loadUsers());
-        Object.values(data.servers).forEach(s=>{
-          regUsers.forEach(u=>{
-            if(!s.members.includes(u)){
-              s.members.push(u);
-              s.memberRoles[u] = s.memberRoles[u] || 'Member';
-            }
-          });
-        });
-        saveData(data);
-      })();
-
-      /****************************************
-       * Render
-       ****************************************/
+      /*** Render ***/
       ReactDOM.createRoot(document.getElementById('root')).render(<App />);
     </script>
   </body>
 </html>
+
